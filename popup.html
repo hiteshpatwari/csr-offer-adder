@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>CSR Offer Adder</title>
+    <link rel="stylesheet" href="styles.css">
+  </head>
+  <body class="csr-popup">
+    <main>
+      <h1>CSR Offer Adder</h1>
+      <p id="connection" class="muted">Checking this tab…</p>
+
+      <section class="stats" aria-live="polite">
+        <div><span id="detected">0</span><small>Detected</small></div>
+        <div><span id="added">0</span><small>Added</small></div>
+        <div><span id="skipped">0</span><small>Skipped</small></div>
+        <div><span id="remaining">0</span><small>Remaining</small></div>
+      </section>
+
+      <p id="status" class="status">Open a Chase Offers page, then click Start.</p>
+
+      <div class="actions">
+        <button id="start" type="button">Start</button>
+        <button id="stop" type="button" class="secondary">Stop</button>
+      </div>
+
+      <p class="privacy">Runs locally in this tab only. It does not collect, transmit, or store login data.</p>
+    </main>
+    <script src="popup.js"></script>
+  </body>
+</html>
