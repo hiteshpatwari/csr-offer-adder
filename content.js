@@ -20,19 +20,38 @@
   const addIntentPattern = /(^|\b)(add|activate|clip|save)(\b|\s+(offer|deal|to card|now))/i;
   const addedPattern = /(added|activated|saved|clipped|enrolled|selected|success|complete)/i;
   const invalidPattern = /(remove|terms|detail|learn|view|shop|redeem|expired|unavailable|added|activated|saved|clipped|enrolled)/i;
-  const cardSelector = [
+  const commerceTileSelector = '[data-testid="commerce-tile"], [data-cy="commerce-tile"]';
+  const commerceTileAddAffordanceSelector = [
+    '[data-testid="commerce-tile-button"]',
+    '[data-cy="commerce-tile-button"]'
+  ].join(',');
+  const addedStatusSelector = [
+    '[data-testid*="alert-container-success" i]',
+    '[data-cy*="alert-container-success" i]',
+    '[data-testid*="success" i]',
+    '[data-cy*="success" i]'
+  ].join(',');
+  const offerContextSelector = [
+    commerceTileSelector,
     '[data-testid*="offer" i]',
     '[data-test*="offer" i]',
     '[data-cy*="offer" i]',
     '[id*="offer" i]',
+    '[aria-label*="offer" i]',
+    '[aria-labelledby*="offer" i]',
+    '[class*="offer" i]'
+  ].join(',');
+  const cardSelector = [
+    commerceTileSelector,
+    offerContextSelector,
     'article',
     'li',
     '[role="listitem"]',
-    '[class*="offer" i]',
     '[class*="card" i]'
   ].join(',');
 
   const ignoredControls = new WeakSet();
+  const completedOfferKeys = new Set();
 
   const state = {
     running: false,
@@ -92,12 +111,56 @@
     return el.closest(cardSelector) || el.closest('section, div, li, article') || el.parentElement;
   }
 
+  function clickableControl(el) {
+    if (!el) return null;
+    if (el.matches('button, input[type="button"], input[type="submit"], a, [role="button"], [tabindex]')) {
+      return el;
+    }
+    return el.closest('button, input[type="button"], input[type="submit"], a, [role="button"], [tabindex]');
+  }
+
+  function isCommerceTile(el) {
+    return Boolean(el?.matches?.(commerceTileSelector));
+  }
+
+  function hasCommerceTileAddAffordance(card) {
+    return Boolean(card && isCommerceTile(card) && card.querySelector(commerceTileAddAffordanceSelector));
+  }
+
+  function hasOfferContext(el, card) {
+    const combinedText = [textOf(el), card && card !== el ? textOf(card) : ''].filter(Boolean).join(' ');
+    return Boolean(
+      el.closest(offerContextSelector) ||
+      card?.matches?.(offerContextSelector) ||
+      /\b(offer|deal|cash back|points back|to card)\b/i.test(combinedText)
+    );
+  }
+
+  function offerKey(el) {
+    const card = nearestOfferCard(el);
+    const rawKey = [
+      card?.id,
+      el.id,
+      card?.getAttribute?.('aria-labelledby'),
+      el.getAttribute?.('aria-labelledby')
+    ].find(Boolean);
+
+    if (!rawKey) return '';
+    return rawKey
+      .replace(/^banner-/, '')
+      .replace(/^carousel_\d+_/, '')
+      .replace(/^banner-carousel_\d+_/, '');
+  }
+
   function cardLooksAlreadyAdded(card) {
     if (!card) return false;
+    if (card.matches(addedStatusSelector) || card.querySelector(addedStatusSelector)) return true;
     const statusBits = [
       card.getAttribute('aria-label'),
       card.getAttribute('data-status'),
-      ...Array.from(card.querySelectorAll('[aria-live], [role="status"], [data-status], [class*="status" i]'))
+      card.getAttribute('data-testid'),
+      card.getAttribute('data-cy'),
+      ...Array.from(card.querySelectorAll('[aria-live], [role="status"], [data-status], [class*="status" i], [data-testid*="success" i], [data-cy*="success" i]'))
         .slice(0, 5)
         .map(textOf)
     ].filter(Boolean).join(' ');
@@ -107,12 +170,18 @@
   function elementLooksAddable(el) {
     const label = textOf(el);
     const card = nearestOfferCard(el);
+    const combinedLabel = [label, card && card !== el ? textOf(card) : ''].filter(Boolean).join(' ');
+    const commerceCard = isCommerceTile(el) ? el : card?.closest?.(commerceTileSelector);
+    const tileAddAffordance = hasCommerceTileAddAffordance(commerceCard);
+    const explicitAddIntent = addIntentPattern.test(combinedLabel);
 
     if (!isVisible(el) || isDisabled(el)) return false;
     if (!el.matches('button, input[type="button"], input[type="submit"], a, [role="button"], [tabindex]')) return false;
-    if (invalidPattern.test(label) && !addIntentPattern.test(label)) return false;
-    if (!addIntentPattern.test(label)) return false;
     if (cardLooksAlreadyAdded(card)) return false;
+    if (tileAddAffordance) return true;
+    if (invalidPattern.test(combinedLabel)) return false;
+    if (!explicitAddIntent) return false;
+    if (!hasOfferContext(el, card)) return false;
 
     return true;
   }
@@ -129,16 +198,26 @@
       '[data-testid*="add" i]',
       '[data-test*="add" i]',
       '[data-cy*="add" i]',
-      '[data-action*="add" i]'
+      '[data-action*="add" i]',
+      commerceTileSelector,
+      commerceTileAddAffordanceSelector
     ].join(',');
 
     const unique = new Set();
+    const seenOfferKeys = new Set();
     const results = [];
 
-    for (const el of document.querySelectorAll(selector)) {
+    for (const rawEl of document.querySelectorAll(selector)) {
+      const el = clickableControl(rawEl);
+      if (!el) continue;
       if (unique.has(el)) continue;
       unique.add(el);
-      if (!ignoredControls.has(el) && elementLooksAddable(el)) results.push(el);
+      const key = offerKey(el);
+      if (key && (completedOfferKeys.has(key) || seenOfferKeys.has(key))) continue;
+      if (!ignoredControls.has(el) && elementLooksAddable(el)) {
+        if (key) seenOfferKeys.add(key);
+        results.push(el);
+      }
     }
 
     return results.sort((a, b) => a.getBoundingClientRect().top - b.getBoundingClientRect().top);
@@ -245,6 +324,7 @@
 
   async function clickOffer(button) {
     const card = nearestOfferCard(button);
+    const key = offerKey(button);
 
     button.scrollIntoView({ block: 'center', inline: 'nearest', behavior: 'smooth' });
     await sleep(350);
@@ -262,6 +342,7 @@
       await dismissPossibleModal();
 
       const resolved = !button.isConnected || !elementLooksAddable(button) || cardLooksAlreadyAdded(card);
+      if (resolved && key) completedOfferKeys.add(key);
       if (!resolved) ignoredControls.add(button);
       updateStatus({
         added: resolved ? state.added + 1 : state.added,
@@ -297,11 +378,12 @@
     let scrollPasses = 0;
     let noProgressPasses = 0;
     let clicks = 0;
+    completedOfferKeys.clear();
 
     while (!state.stopRequested && clicks < CONFIG.maxClicks) {
       const candidates = findCandidates();
       const previousProgress = state.added + state.skipped;
-      updateStatus({ detected: Math.max(state.detected, state.added + state.skipped + candidates.length), message: `Found ${candidates.length} addable offer control(s).` });
+      updateStatus({ detected: Math.max(state.detected, state.added + state.skipped + candidates.length), message: `Found ${candidates.length} unique addable offer(s).` });
 
       if (candidates.length > 0) {
         await clickOffer(candidates[0]);
