@@ -1,0 +1,125 @@
+#csr-offer-adder-overlay {
+  position: fixed;
+  z-index: 2147483647;
+  right: 16px;
+  bottom: 16px;
+  width: 280px;
+  box-sizing: border-box;
+  padding: 14px;
+  border-radius: 14px;
+  border: 1px solid rgba(255, 255, 255, 0.35);
+  background: #0b1f33;
+  color: #fff;
+  font-family: Arial, Helvetica, sans-serif;
+  box-shadow: 0 18px 50px rgba(0, 0, 0, 0.35);
+}
+
+.csr-offer-adder-title {
+  font-size: 15px;
+  font-weight: 700;
+  margin-bottom: 8px;
+}
+
+.csr-offer-adder-message {
+  font-size: 13px;
+  line-height: 1.35;
+  margin-bottom: 10px;
+}
+
+.csr-offer-adder-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.csr-offer-adder-grid span {
+  padding: 8px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.1);
+  font-size: 12px;
+}
+
+.csr-offer-adder-grid b {
+  display: block;
+  font-size: 18px;
+  margin-top: 2px;
+}
+
+#csr-offer-adder-overlay button,
+.csr-popup button {
+  appearance: none;
+  border: 0;
+  border-radius: 999px;
+  background: #0b5cab;
+  color: #fff;
+  cursor: pointer;
+  font-weight: 700;
+  padding: 9px 14px;
+}
+
+#csr-offer-adder-overlay button:disabled,
+.csr-popup button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.csr-popup {
+  width: 340px;
+  margin: 0;
+  color: #172033;
+  font-family: Arial, Helvetica, sans-serif;
+}
+
+.csr-popup main {
+  padding: 16px;
+}
+
+.csr-popup h1 {
+  font-size: 18px;
+  margin: 0 0 8px;
+}
+
+.csr-popup .muted,
+.csr-popup .privacy {
+  color: #526070;
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.csr-popup .stats {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin: 12px 0;
+}
+
+.csr-popup .stats div {
+  border: 1px solid #dde5ee;
+  border-radius: 12px;
+  padding: 10px;
+}
+
+.csr-popup .stats span {
+  display: block;
+  font-size: 22px;
+  font-weight: 700;
+}
+
+.csr-popup .stats small {
+  color: #526070;
+}
+
+.csr-popup .status {
+  min-height: 36px;
+  line-height: 1.35;
+}
+
+.csr-popup .actions {
+  display: flex;
+  gap: 8px;
+}
+
+.csr-popup button.secondary {
+  background: #6b7280;
+}
