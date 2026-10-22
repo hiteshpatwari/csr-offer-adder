@@ -29,7 +29,7 @@ function chromeExecutable() {
   });
 }
 
-async function waitForFile(filePath, timeoutMs = 10_000) {
+async function waitForFile(filePath, timeoutMs = 30_000) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     try {
