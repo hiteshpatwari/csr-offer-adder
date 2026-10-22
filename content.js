@@ -4,18 +4,19 @@
   }
   window.__csrOfferAdderLoaded = true;
 
-  const CONFIG = {
+  const CONFIG = Object.freeze({
     clickDelayMinMs: 1200,
     clickDelayMaxMs: 2400,
     settleDelayMs: 1500,
     scrollDelayMs: 900,
     clickTimeoutMs: 9000,
     idleMutationMs: 700,
-    maxScrollPasses: 8,
     maxNoProgressPasses: 3,
     maxClicks: 500,
-    viewportPadding: 120
-  };
+    maxRuntimeMs: 15 * 60 * 1000,
+    viewportPadding: 120,
+    ...(globalThis.__CSR_OFFER_ADDER_TEST_CONFIG__ || {})
+  });
 
   const addIntentPattern = /(^|\b)(add|activate|clip|save)(\b|\s+(offer|deal|to card|now))/i;
   const addedPattern = /(added|activated|saved|clipped|enrolled|selected|success|complete)/i;
@@ -167,19 +168,28 @@
     return addedPattern.test(statusBits);
   }
 
+  function offerHasConfirmedAddedState(card, key) {
+    if (cardLooksAlreadyAdded(card)) return true;
+    if (!key) return false;
+
+    return Array.from(document.querySelectorAll(commerceTileSelector))
+      .some((candidate) => offerKey(candidate) === key && cardLooksAlreadyAdded(candidate));
+  }
+
   function elementLooksAddable(el) {
     const label = textOf(el);
     const card = nearestOfferCard(el);
-    const combinedLabel = [label, card && card !== el ? textOf(card) : ''].filter(Boolean).join(' ');
     const commerceCard = isCommerceTile(el) ? el : card?.closest?.(commerceTileSelector);
     const tileAddAffordance = hasCommerceTileAddAffordance(commerceCard);
-    const explicitAddIntent = addIntentPattern.test(combinedLabel);
+    const explicitAddIntent = addIntentPattern.test(label);
 
     if (!isVisible(el) || isDisabled(el)) return false;
     if (!el.matches('button, input[type="button"], input[type="submit"], a, [role="button"], [tabindex]')) return false;
     if (cardLooksAlreadyAdded(card)) return false;
-    if (tileAddAffordance) return true;
-    if (invalidPattern.test(combinedLabel)) return false;
+    if (commerceCard) {
+      return el === commerceCard && tileAddAffordance && explicitAddIntent;
+    }
+    if (invalidPattern.test(label)) return false;
     if (!explicitAddIntent) return false;
     if (!hasOfferContext(el, card)) return false;
 
@@ -269,7 +279,9 @@
   }
 
   function renderOverlay() {
-    const overlay = ensureOverlay();
+    const existingOverlay = document.getElementById('csr-offer-adder-overlay');
+    if (!state.running && !existingOverlay) return;
+    const overlay = existingOverlay || ensureOverlay();
     overlay.querySelector('.csr-offer-adder-message').textContent = state.message;
     overlay.querySelector('.csr-offer-adder-stop').disabled = !state.running;
     for (const key of ['detected', 'added', 'skipped', 'remaining']) {
@@ -341,15 +353,15 @@
       await sleep(CONFIG.settleDelayMs);
       await dismissPossibleModal();
 
-      const resolved = !button.isConnected || !elementLooksAddable(button) || cardLooksAlreadyAdded(card);
-      if (resolved && key) completedOfferKeys.add(key);
-      if (!resolved) ignoredControls.add(button);
+      const confirmedAdded = offerHasConfirmedAddedState(card, key);
+      if (confirmedAdded && key) completedOfferKeys.add(key);
+      if (!confirmedAdded) ignoredControls.add(button);
       updateStatus({
-        added: resolved ? state.added + 1 : state.added,
-        skipped: resolved ? state.skipped : state.skipped + 1,
-        message: resolved
-          ? 'Offer add action appears complete. Continuing…'
-          : 'Skipped one offer because it still looked addable after the click.'
+        added: confirmedAdded ? state.added + 1 : state.added,
+        skipped: confirmedAdded ? state.skipped : state.skipped + 1,
+        message: confirmedAdded
+          ? 'Offer add action confirmed. Continuing…'
+          : 'Skipped one offer because Chase did not show a confirmed added state.'
       });
       await sleep(humanDelay());
     } catch (error) {
@@ -375,12 +387,16 @@
       message: 'Scanning for addable Chase offers…'
     });
 
-    let scrollPasses = 0;
     let noProgressPasses = 0;
     let clicks = 0;
+    const runStartedAt = Date.now();
     completedOfferKeys.clear();
 
-    while (!state.stopRequested && clicks < CONFIG.maxClicks) {
+    while (
+      !state.stopRequested &&
+      clicks < CONFIG.maxClicks &&
+      Date.now() - runStartedAt < CONFIG.maxRuntimeMs
+    ) {
       const candidates = findCandidates();
       const previousProgress = state.added + state.skipped;
       updateStatus({ detected: Math.max(state.detected, state.added + state.skipped + candidates.length), message: `Found ${candidates.length} unique addable offer(s).` });
@@ -392,24 +408,26 @@
         continue;
       }
 
-      if (scrollPasses >= CONFIG.maxScrollPasses || noProgressPasses >= CONFIG.maxNoProgressPasses) {
+      if (noProgressPasses >= CONFIG.maxNoProgressPasses) {
         break;
       }
 
       updateStatus({ message: 'No visible addable offers. Scrolling to reveal more…' });
       const moved = await scrollToRevealMore();
-      scrollPasses += 1;
-      if (!moved) noProgressPasses += 1;
+      noProgressPasses = moved ? 0 : noProgressPasses + 1;
     }
 
     const stopped = state.stopRequested;
+    const safetyLimitReached = clicks >= CONFIG.maxClicks || Date.now() - runStartedAt >= CONFIG.maxRuntimeMs;
     updateStatus({
       running: false,
       stopRequested: false,
       completedAt: new Date().toISOString(),
       message: stopped
         ? `Stopped. Added ${state.added} offer(s), skipped ${state.skipped}.`
-        : `Complete. Added ${state.added} offer(s), skipped ${state.skipped}. No addable offers remain visible.`
+        : safetyLimitReached
+          ? `Stopped at the safety limit. Added ${state.added} offer(s), skipped ${state.skipped}. Review the page before continuing.`
+          : `Complete. Added ${state.added} offer(s), skipped ${state.skipped}. No addable offers remain visible.`
     });
     return snapshot();
   }

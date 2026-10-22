@@ -11,11 +11,7 @@ async function getActiveTab() {
 }
 
 function isChaseTab(tab) {
-  try {
-    return new URL(tab?.url || '').hostname.endsWith('chase.com');
-  } catch {
-    return false;
-  }
+  return CSROfferAdderURLPolicy.isChaseUrl(tab?.url || '');
 }
 
 async function sendToActiveTab(message) {

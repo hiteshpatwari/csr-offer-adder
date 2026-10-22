@@ -2,14 +2,11 @@
   "manifest_version": 3,
   "name": "CSR Offer Adder",
   "description": "Locally automates adding available Chase Sapphire Reserve offers on Chase Offers pages without collecting or transmitting account data.",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "minimum_chrome_version": "114",
   "permissions": [
     "activeTab",
     "scripting"
-  ],
-  "host_permissions": [
-    "https://*.chase.com/*"
   ],
   "action": {
     "default_title": "CSR Offer Adder",
@@ -17,19 +14,5 @@
   },
   "background": {
     "service_worker": "service_worker.js"
-  },
-  "content_scripts": [
-    {
-      "matches": [
-        "https://*.chase.com/*"
-      ],
-      "js": [
-        "content.js"
-      ],
-      "css": [
-        "styles.css"
-      ],
-      "run_at": "document_idle"
-    }
-  ]
+  }
 }

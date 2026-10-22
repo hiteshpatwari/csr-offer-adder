@@ -4,7 +4,8 @@ A local-only Chrome Extension that helps add available Chase Sapphire Reserve of
 
 ## Privacy and safety
 
-- Runs only in the active browser tab on `https://*.chase.com/*`.
+- Runs only after the user clicks the toolbar action on an active `chase.com` tab.
+- Uses temporary `activeTab` access and does not request persistent access to Chase or any other site.
 - Does not collect, transmit, or store usernames, passwords, cookies, account numbers, or offer data.
 - Uses Manifest V3 and local content-script automation only.
 - Requires manual Chase login by the user.
@@ -12,20 +13,24 @@ A local-only Chrome Extension that helps add available Chase Sapphire Reserve of
 
 ## DOM analysis notes
 
-The originally referenced file, `/Users/hitesh.patwari/Desktop/csr-offers.html`, was not available inside this repository/container, so this package is designed around resilient DOM patterns rather than one brittle snapshot. When testing against a saved Chase Offers HTML page, confirm these assumptions and adjust selectors only if needed:
+A sanitized Chase Offers fragment was analyzed during the 1.0.1 selector hardening:
 
-- Individual offers are treated as card-like containers discovered from semantic and stable attributes: `article`, `li`, `[role="listitem"]`, IDs/data attributes containing `offer`, and card-like containers.
-- Add controls are detected from stable interaction semantics: `button`, `input[type="button"]`, `input[type="submit"]`, anchors or elements with `role="button"`, and controls whose accessible labels or data attributes indicate add/activate/save/clip intent.
-- Already-added offers are skipped when the control or nearby card/status region indicates an added, activated, saved, clipped, enrolled, selected, success, or complete state; disabled and `aria-disabled="true"` controls are also skipped.
-- Offers may be loaded all at once, lazily as the user scrolls, or through dynamic DOM updates. The content script re-scans after every click, watches for DOM mutations, scrolls through the page, and stops after repeated no-progress passes.
-- Merchant names, offer titles, and fixed offer copy are intentionally not used.
+- It contained 35 cards whose accessible positions were 1–35 of 126. The fragment did not include the surrounding page, so it proves only that the captured DOM was partial; it cannot distinguish virtualization, infinite scrolling, or pagination.
+- Every captured offer used one root `<a role="button">` with `data-testid="commerce-tile"` and `data-cy="commerce-tile"`. Its accessible label ended in `Add Offer`.
+- The nested `commerce-tile-button` element was an `aria-hidden` SVG plus icon, not a clickable button. The extension resolves that marker to the root commerce-tile control and never clicks the SVG itself.
+- Every captured card had exactly one interactive control. Generic fallback detection remains available for alternate Chase markup, but a nested control is never accepted merely because its card contains a commerce-tile plus icon.
+- The fragment contained only unadded offers. Already-added detection is covered with a synthetic browser regression test, but its exact live Chase representation still requires supervised confirmation after an add action.
+- Merchant names, offer titles, offer IDs, and generated class names are not used as selectors.
+
+The content script re-scans after every click, watches for DOM mutations, scrolls to reveal additional offers, and stops after repeated no-progress passes.
 
 ## Files
 
-- `manifest.json` — Manifest V3 extension definition, popup, content script, service worker, and minimum Chase host permission.
+- `manifest.json` — Manifest V3 extension definition using temporary active-tab access without persistent host permissions.
 - `content.js` — DOM scanning, resilient selector strategies, one-at-a-time clicking, scrolling, timeout handling, modal dismissal, cancellation, and injected status overlay.
 - `service_worker.js` — Badge feedback based on tab status messages.
 - `popup.html` / `popup.js` — Toolbar popup UI with Start/Stop controls and progress counters.
+- `url_policy.js` — Exact HTTPS Chase-domain boundary used before active-tab injection.
 - `styles.css` — Popup and injected overlay styles.
 
 ## Installation
@@ -43,9 +48,23 @@ The originally referenced file, `/Users/hitesh.patwari/Desktop/csr-offers.html`,
 
 ## Testing plan
 
+### Automated browser checks
+
+Run `npm test` with Node.js 22 or newer and Chrome/Chromium installed. The tests launch a real headless browser and verify:
+
+- the captured Chase commerce-tile structure resolves to its clickable root;
+- unrelated nested controls are rejected;
+- already-added tiles are skipped;
+- temporary disabled/loading states are not counted as successful additions;
+- processing continues after an unresolved offer;
+- scrolling continues while the page is still advancing, including beyond eight viewport passes;
+- the page overlay remains hidden until the user starts a run.
+
+`npm run check` also runs syntax checks for every extension script. The same command runs in GitHub Actions.
+
 ### Saved HTML file
 
-1. Open the saved Chase Offers HTML file in Chrome.
+1. Open a saved Chase Offers HTML page in Chrome. A fragment containing only cards is sufficient for selector inspection but cannot reproduce page loading behavior.
 2. If Chrome blocks extension access to `file://` pages, either:
    - enable **Allow access to file URLs** for this extension on `chrome://extensions`, or
    - serve the file locally for manual inspection and temporarily add the local test host to `manifest.json` during development only.

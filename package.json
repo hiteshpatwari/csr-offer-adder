@@ -1,0 +1,12 @@
+{
+  "name": "csr-offer-adder",
+  "version": "1.0.1",
+  "private": true,
+  "scripts": {
+    "test": "node --test test/content.browser.test.mjs",
+    "check": "node --check content.js && node --check popup.js && node --check service_worker.js && node --check url_policy.js && node -e \"JSON.parse(require('node:fs').readFileSync('manifest.json', 'utf8'))\" && node --test test/content.browser.test.mjs"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}
