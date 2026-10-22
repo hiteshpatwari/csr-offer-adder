@@ -23,6 +23,7 @@ A sanitized Chase Offers fragment was analyzed during the 1.0.1 selector hardeni
 - Merchant names, offer titles, offer IDs, and generated class names are not used as selectors.
 
 The content script re-scans after every click, watches for DOM mutations, scrolls to reveal additional offers, and stops after repeated no-progress passes.
+Before declaring completion, it returns to the top and performs a full-page verification sweep so virtualized cards can reappear. Detected, added, skipped, and remaining counts are tracked by offer identity. If a previously detected offer never reappears, the run reports **Incomplete** with a reload-and-retry instruction instead of claiming completion with a nonzero remaining count.
 
 ## Files
 
@@ -58,6 +59,8 @@ Run `npm test` with Node.js 22 or newer and Chrome/Chromium installed. The tests
 - temporary disabled/loading states are not counted as successful additions;
 - processing continues after an unresolved offer;
 - scrolling continues while the page is still advancing, including beyond eight viewport passes;
+- virtualized offers that disappear during a click are recovered by a top-to-bottom verification sweep;
+- a run with unresolved detected offers reports `Incomplete` and never `Complete` with a nonzero Remaining count;
 - the page overlay remains hidden until the user starts a run.
 
 `npm run check` also runs syntax checks for every extension script. The same command runs in GitHub Actions.

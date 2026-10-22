@@ -52,7 +52,12 @@
   ].join(',');
 
   const ignoredControls = new WeakSet();
-  const completedOfferKeys = new Set();
+  const handledOfferKeys = new Set();
+  const discoveredOfferKeys = new Set();
+  const addedOfferKeys = new Set();
+  const skippedOfferKeys = new Set();
+  let anonymousOfferKeys = new WeakMap();
+  let nextAnonymousOfferKey = 0;
 
   const state = {
     running: false,
@@ -153,6 +158,47 @@
       .replace(/^banner-carousel_\d+_/, '');
   }
 
+  function trackingKey(el) {
+    const stableKey = offerKey(el);
+    if (stableKey) return `stable:${stableKey}`;
+    if (!anonymousOfferKeys.has(el)) {
+      nextAnonymousOfferKey += 1;
+      anonymousOfferKeys.set(el, `element:${nextAnonymousOfferKey}`);
+    }
+    return anonymousOfferKeys.get(el);
+  }
+
+  function resetTracking() {
+    handledOfferKeys.clear();
+    discoveredOfferKeys.clear();
+    addedOfferKeys.clear();
+    skippedOfferKeys.clear();
+    anonymousOfferKeys = new WeakMap();
+    nextAnonymousOfferKey = 0;
+  }
+
+  function registerCandidates(candidates) {
+    for (const candidate of candidates) discoveredOfferKeys.add(trackingKey(candidate));
+  }
+
+  function trackedStatus(patch = {}) {
+    return {
+      detected: discoveredOfferKeys.size,
+      added: addedOfferKeys.size,
+      skipped: skippedOfferKeys.size,
+      remaining: Math.max(0, discoveredOfferKeys.size - addedOfferKeys.size - skippedOfferKeys.size),
+      ...patch
+    };
+  }
+
+  function recordOutcome(el, outcome) {
+    const key = trackingKey(el);
+    discoveredOfferKeys.add(key);
+    handledOfferKeys.add(key);
+    if (outcome === 'added') addedOfferKeys.add(key);
+    else skippedOfferKeys.add(key);
+  }
+
   function cardLooksAlreadyAdded(card) {
     if (!card) return false;
     if (card.matches(addedStatusSelector) || card.querySelector(addedStatusSelector)) return true;
@@ -222,10 +268,10 @@
       if (!el) continue;
       if (unique.has(el)) continue;
       unique.add(el);
-      const key = offerKey(el);
-      if (key && (completedOfferKeys.has(key) || seenOfferKeys.has(key))) continue;
+      const key = trackingKey(el);
+      if (handledOfferKeys.has(key) || seenOfferKeys.has(key)) continue;
       if (!ignoredControls.has(el) && elementLooksAddable(el)) {
-        if (key) seenOfferKeys.add(key);
+        seenOfferKeys.add(key);
         results.push(el);
       }
     }
@@ -235,7 +281,6 @@
 
   function updateStatus(patch = {}) {
     Object.assign(state, patch);
-    state.remaining = Math.max(0, state.detected - state.added - state.skipped);
     renderOverlay();
     chrome.runtime.sendMessage({ type: 'CSR_OFFER_STATUS', payload: snapshot() }).catch(() => {});
   }
@@ -283,7 +328,9 @@
     if (!state.running && !existingOverlay) return;
     const overlay = existingOverlay || ensureOverlay();
     overlay.querySelector('.csr-offer-adder-message').textContent = state.message;
-    overlay.querySelector('.csr-offer-adder-stop').disabled = !state.running;
+    const stopButton = overlay.querySelector('.csr-offer-adder-stop');
+    stopButton.disabled = !state.running;
+    stopButton.textContent = state.running ? 'Stop' : 'Finished';
     for (const key of ['detected', 'added', 'skipped', 'remaining']) {
       overlay.querySelector(`[data-stat="${key}"]`).textContent = String(state[key]);
     }
@@ -319,6 +366,12 @@
     return afterHeight > beforeHeight || window.scrollY > beforeY || !atBottom;
   }
 
+  async function restartFromTop() {
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+    await sleep(CONFIG.scrollDelayMs);
+    await waitForDomIdle(2500);
+  }
+
   async function dismissPossibleModal() {
     const closeSelectors = [
       '[aria-label="Close" i]',
@@ -341,8 +394,18 @@
     button.scrollIntoView({ block: 'center', inline: 'nearest', behavior: 'smooth' });
     await sleep(350);
     if (!elementLooksAddable(button)) {
+      if (!button.isConnected || !card?.isConnected) {
+        updateStatus(trackedStatus({ message: 'An offer left the page before it could be clicked. Rechecking for it…' }));
+        return;
+      }
       ignoredControls.add(button);
-      updateStatus({ skipped: state.skipped + 1, message: 'Skipped an offer that changed before clicking.' });
+      const confirmedAdded = offerHasConfirmedAddedState(card, key);
+      recordOutcome(button, confirmedAdded ? 'added' : 'skipped');
+      updateStatus(trackedStatus({
+        message: confirmedAdded
+          ? 'Offer add state was already confirmed. Continuing…'
+          : 'Skipped an offer that changed before clicking.'
+      }));
       return;
     }
 
@@ -354,19 +417,29 @@
       await dismissPossibleModal();
 
       const confirmedAdded = offerHasConfirmedAddedState(card, key);
-      if (confirmedAdded && key) completedOfferKeys.add(key);
-      if (!confirmedAdded) ignoredControls.add(button);
-      updateStatus({
-        added: confirmedAdded ? state.added + 1 : state.added,
-        skipped: confirmedAdded ? state.skipped : state.skipped + 1,
+      const disappearedBeforeConfirmation = !confirmedAdded && (!button.isConnected || !card?.isConnected);
+      if (!confirmedAdded && !disappearedBeforeConfirmation) ignoredControls.add(button);
+      if (!disappearedBeforeConfirmation) recordOutcome(button, confirmedAdded ? 'added' : 'skipped');
+      updateStatus(trackedStatus({
         message: confirmedAdded
           ? 'Offer add action confirmed. Continuing…'
+          : disappearedBeforeConfirmation
+            ? 'The clicked offer left the page before Chase confirmed it. Rechecking for it…'
           : 'Skipped one offer because Chase did not show a confirmed added state.'
-      });
+      }));
       await sleep(humanDelay());
     } catch (error) {
+      if (!button.isConnected || !card?.isConnected) {
+        updateStatus(trackedStatus({
+          lastError: error.message,
+          message: 'The offer left the page during the click attempt. Rechecking for it…'
+        }));
+        await sleep(500);
+        return;
+      }
       ignoredControls.add(button);
-      updateStatus({ skipped: state.skipped + 1, lastError: error.message, message: 'Skipped one offer after a click error.' });
+      recordOutcome(button, 'skipped');
+      updateStatus(trackedStatus({ lastError: error.message, message: 'Skipped one offer after a click error.' }));
       await sleep(500);
     }
   }
@@ -387,10 +460,12 @@
       message: 'Scanning for addable Chase offers…'
     });
 
-    let noProgressPasses = 0;
+    let bottomStalls = 0;
     let clicks = 0;
+    let verificationSweepStarted = false;
+    let progressAtSweepStart = 0;
     const runStartedAt = Date.now();
-    completedOfferKeys.clear();
+    resetTracking();
 
     while (
       !state.stopRequested &&
@@ -398,28 +473,44 @@
       Date.now() - runStartedAt < CONFIG.maxRuntimeMs
     ) {
       const candidates = findCandidates();
+      registerCandidates(candidates);
       const previousProgress = state.added + state.skipped;
-      updateStatus({ detected: Math.max(state.detected, state.added + state.skipped + candidates.length), message: `Found ${candidates.length} unique addable offer(s).` });
+      updateStatus(trackedStatus({ message: `Found ${candidates.length} unique addable offer(s).` }));
 
       if (candidates.length > 0) {
         await clickOffer(candidates[0]);
         clicks += 1;
-        noProgressPasses = state.added + state.skipped > previousProgress ? 0 : noProgressPasses + 1;
+        bottomStalls = state.added + state.skipped > previousProgress ? 0 : bottomStalls + 1;
         continue;
-      }
-
-      if (noProgressPasses >= CONFIG.maxNoProgressPasses) {
-        break;
       }
 
       updateStatus({ message: 'No visible addable offers. Scrolling to reveal more…' });
       const moved = await scrollToRevealMore();
-      noProgressPasses = moved ? 0 : noProgressPasses + 1;
+      if (moved) {
+        bottomStalls = 0;
+        continue;
+      }
+
+      bottomStalls += 1;
+      if (bottomStalls < CONFIG.maxNoProgressPasses) continue;
+
+      const currentProgress = state.added + state.skipped;
+      if (!verificationSweepStarted || currentProgress > progressAtSweepStart) {
+        updateStatus({ message: 'Reached the bottom. Rechecking from the top for virtualized offers…' });
+        await restartFromTop();
+        verificationSweepStarted = true;
+        progressAtSweepStart = currentProgress;
+        bottomStalls = 0;
+        continue;
+      }
+
+      break;
     }
 
     const stopped = state.stopRequested;
     const safetyLimitReached = clicks >= CONFIG.maxClicks || Date.now() - runStartedAt >= CONFIG.maxRuntimeMs;
-    updateStatus({
+    const unresolved = Math.max(0, discoveredOfferKeys.size - addedOfferKeys.size - skippedOfferKeys.size);
+    updateStatus(trackedStatus({
       running: false,
       stopRequested: false,
       completedAt: new Date().toISOString(),
@@ -427,8 +518,10 @@
         ? `Stopped. Added ${state.added} offer(s), skipped ${state.skipped}.`
         : safetyLimitReached
           ? `Stopped at the safety limit. Added ${state.added} offer(s), skipped ${state.skipped}. Review the page before continuing.`
-          : `Complete. Added ${state.added} offer(s), skipped ${state.skipped}. No addable offers remain visible.`
-    });
+          : unresolved > 0
+            ? `Incomplete. Added ${state.added} offer(s), skipped ${state.skipped}. ${unresolved} previously detected offer(s) are no longer visible; reload the page and run again.`
+            : `Complete. Added ${state.added} offer(s), skipped ${state.skipped}. No addable offers remain after a full-page recheck.`
+    }));
     return snapshot();
   }
 
@@ -439,7 +532,16 @@
 
   chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     if (message?.type === 'CSR_OFFER_GET_STATUS') {
-      updateStatus({ detected: Math.max(state.detected, findCandidates().length), message: state.message || 'Ready.' });
+      if (!state.running && !state.completedAt) {
+        const candidates = findCandidates();
+        updateStatus({
+          detected: candidates.length,
+          added: 0,
+          skipped: 0,
+          remaining: candidates.length,
+          message: state.message || 'Ready.'
+        });
+      }
       sendResponse({ status: snapshot() });
       return false;
     }
@@ -457,5 +559,10 @@
     return false;
   });
 
-  updateStatus({ detected: findCandidates().length, message: 'Ready. Click the extension icon to start.' });
+  const initialCandidates = findCandidates();
+  updateStatus({
+    detected: initialCandidates.length,
+    remaining: initialCandidates.length,
+    message: 'Ready. Click the extension icon to start.'
+  });
 })();

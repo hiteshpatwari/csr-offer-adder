@@ -356,3 +356,214 @@ test('keeps scrolling past eight advancing passes to find a later offer', async 
     assert.match(response.status.message, /^Complete\./);
   });
 });
+
+test('restarts from the top before completing when virtualization removes pending offers', async () => {
+  const body = `
+    <main id="offers">
+      <a id="first" href="/#" role="button" tabindex="0"
+         data-testid="commerce-tile" aria-label="1 of 2 Example Merchant 10% cash back Add Offer"
+         style="display:block;width:240px;height:180px">
+        <svg aria-hidden="true" data-testid="commerce-tile-button"></svg>
+      </a>
+      <a id="second" href="/#" role="button" tabindex="0"
+         data-testid="commerce-tile" aria-label="2 of 2 Example Merchant 5% cash back Add Offer"
+         style="display:block;width:240px;height:180px">
+        <svg aria-hidden="true" data-testid="commerce-tile-button"></svg>
+      </a>
+    </main>
+  `;
+  const fastConfig = {
+    clickDelayMinMs: 0,
+    clickDelayMaxMs: 1,
+    settleDelayMs: 0,
+    scrollDelayMs: 0,
+    clickTimeoutMs: 50,
+    idleMutationMs: 5,
+    maxNoProgressPasses: 1,
+    maxRuntimeMs: 10_000
+  };
+
+  await withBrowser(async ({ evaluate }) => {
+    await evaluate(pageSetup(body, fastConfig));
+    await evaluate(`
+      let syntheticScrollY = 0;
+      const secondOffer = document.getElementById('second');
+      globalThis.__clickedOffers = [];
+      globalThis.__topRestarts = 0;
+      Object.defineProperty(window, 'scrollY', { configurable: true, get: () => syntheticScrollY });
+      Object.defineProperty(document.documentElement, 'scrollHeight', { configurable: true, get: () => 2_000 });
+      window.scrollBy = () => { syntheticScrollY = 2_000; };
+      window.scrollTo = () => {
+        syntheticScrollY = 0;
+        globalThis.__topRestarts += 1;
+        if (!secondOffer.isConnected) document.getElementById('offers').appendChild(secondOffer);
+      };
+      document.getElementById('first').addEventListener('click', (event) => {
+        event.preventDefault();
+        globalThis.__clickedOffers.push('first');
+        event.currentTarget.setAttribute('aria-label', '1 of 2 Example Merchant Offer Added');
+        event.currentTarget.querySelector('[data-testid="commerce-tile-button"]').remove();
+        secondOffer.remove();
+      });
+      secondOffer.addEventListener('click', (event) => {
+        event.preventDefault();
+        globalThis.__clickedOffers.push('second');
+        event.currentTarget.setAttribute('aria-label', '2 of 2 Example Merchant Offer Added');
+        event.currentTarget.querySelector('[data-testid="commerce-tile-button"]').remove();
+      });
+    `);
+
+    const response = await evaluate(`__sendRuntimeMessage({ type: 'CSR_OFFER_START' })`);
+    const clickedOffers = await evaluate(`globalThis.__clickedOffers`);
+    const topRestarts = await evaluate(`globalThis.__topRestarts`);
+
+    assert.deepEqual(clickedOffers, ['first', 'second']);
+    assert.ok(topRestarts >= 1);
+    assert.equal(response.status.detected, 2);
+    assert.equal(response.status.added, 2);
+    assert.equal(response.status.skipped, 0);
+    assert.equal(response.status.remaining, 0);
+    assert.match(response.status.message, /^Complete\./);
+  });
+});
+
+test('reports incomplete instead of complete when a detected offer never returns', async () => {
+  const body = `
+    <main id="offers">
+      <a id="first" href="/#" role="button" tabindex="0"
+         data-testid="commerce-tile" aria-label="1 of 2 Example Merchant 10% cash back Add Offer"
+         style="display:block;width:240px;height:180px">
+        <svg aria-hidden="true" data-testid="commerce-tile-button"></svg>
+      </a>
+      <a id="vanishing" href="/#" role="button" tabindex="0"
+         data-testid="commerce-tile" aria-label="2 of 2 Example Merchant 5% cash back Add Offer"
+         style="display:block;width:240px;height:180px">
+        <svg aria-hidden="true" data-testid="commerce-tile-button"></svg>
+      </a>
+    </main>
+  `;
+  const fastConfig = {
+    clickDelayMinMs: 0,
+    clickDelayMaxMs: 1,
+    settleDelayMs: 0,
+    scrollDelayMs: 0,
+    clickTimeoutMs: 50,
+    idleMutationMs: 5,
+    maxNoProgressPasses: 1,
+    maxRuntimeMs: 10_000
+  };
+
+  await withBrowser(async ({ evaluate }) => {
+    await evaluate(pageSetup(body, fastConfig));
+    await evaluate(`
+      let syntheticScrollY = 0;
+      Object.defineProperty(window, 'scrollY', { configurable: true, get: () => syntheticScrollY });
+      Object.defineProperty(document.documentElement, 'scrollHeight', { configurable: true, get: () => 2_000 });
+      window.scrollBy = () => { syntheticScrollY = 2_000; };
+      window.scrollTo = () => { syntheticScrollY = 0; };
+      document.getElementById('first').addEventListener('click', (event) => {
+        event.preventDefault();
+        event.currentTarget.setAttribute('aria-label', '1 of 2 Example Merchant Offer Added');
+        event.currentTarget.querySelector('[data-testid="commerce-tile-button"]').remove();
+        document.getElementById('vanishing').remove();
+      });
+    `);
+
+    const response = await evaluate(`__sendRuntimeMessage({ type: 'CSR_OFFER_START' })`);
+    const overlayButtonText = await evaluate(`document.querySelector('.csr-offer-adder-stop').textContent`);
+
+    assert.equal(response.status.detected, 2);
+    assert.equal(response.status.added, 1);
+    assert.equal(response.status.skipped, 0);
+    assert.equal(response.status.remaining, 1);
+    assert.match(response.status.message, /^Incomplete\./);
+    assert.equal(overlayButtonText, 'Finished');
+  });
+});
+
+test('keeps an active offer unresolved when virtualization removes it before click', async () => {
+  const body = `
+    <main id="offers">
+      <a id="vanishing" href="/#" role="button" tabindex="0"
+         data-testid="commerce-tile" aria-label="1 of 1 Example Merchant 10% cash back Add Offer"
+         style="display:block;width:240px;height:180px">
+        <svg aria-hidden="true" data-testid="commerce-tile-button"></svg>
+      </a>
+    </main>
+  `;
+  const fastConfig = {
+    clickDelayMinMs: 0,
+    clickDelayMaxMs: 1,
+    settleDelayMs: 0,
+    scrollDelayMs: 0,
+    clickTimeoutMs: 50,
+    idleMutationMs: 5,
+    maxNoProgressPasses: 1,
+    maxRuntimeMs: 10_000
+  };
+
+  await withBrowser(async ({ evaluate }) => {
+    await evaluate(pageSetup(body, fastConfig));
+    await evaluate(`
+      let syntheticScrollY = 0;
+      Object.defineProperty(window, 'scrollY', { configurable: true, get: () => syntheticScrollY });
+      Object.defineProperty(document.documentElement, 'scrollHeight', { configurable: true, get: () => 2_000 });
+      window.scrollBy = () => { syntheticScrollY = 2_000; };
+      window.scrollTo = () => { syntheticScrollY = 0; };
+      document.getElementById('vanishing').scrollIntoView = function () { this.remove(); };
+    `);
+
+    const response = await evaluate(`__sendRuntimeMessage({ type: 'CSR_OFFER_START' })`);
+
+    assert.equal(response.status.detected, 1);
+    assert.equal(response.status.added, 0);
+    assert.equal(response.status.skipped, 0);
+    assert.equal(response.status.remaining, 1);
+    assert.match(response.status.message, /^Incomplete\./);
+  });
+});
+
+test('keeps a clicked offer unresolved when it disappears before confirmation', async () => {
+  const body = `
+    <main id="offers">
+      <a id="vanishing" href="/#" role="button" tabindex="0"
+         data-testid="commerce-tile" aria-label="1 of 1 Example Merchant 10% cash back Add Offer"
+         style="display:block;width:240px;height:180px">
+        <svg aria-hidden="true" data-testid="commerce-tile-button"></svg>
+      </a>
+    </main>
+  `;
+  const fastConfig = {
+    clickDelayMinMs: 0,
+    clickDelayMaxMs: 1,
+    settleDelayMs: 0,
+    scrollDelayMs: 0,
+    clickTimeoutMs: 50,
+    idleMutationMs: 5,
+    maxNoProgressPasses: 1,
+    maxRuntimeMs: 10_000
+  };
+
+  await withBrowser(async ({ evaluate }) => {
+    await evaluate(pageSetup(body, fastConfig));
+    await evaluate(`
+      let syntheticScrollY = 0;
+      Object.defineProperty(window, 'scrollY', { configurable: true, get: () => syntheticScrollY });
+      Object.defineProperty(document.documentElement, 'scrollHeight', { configurable: true, get: () => 2_000 });
+      window.scrollBy = () => { syntheticScrollY = 2_000; };
+      window.scrollTo = () => { syntheticScrollY = 0; };
+      document.getElementById('vanishing').addEventListener('click', (event) => {
+        event.preventDefault();
+        event.currentTarget.remove();
+      });
+    `);
+
+    const response = await evaluate(`__sendRuntimeMessage({ type: 'CSR_OFFER_START' })`);
+
+    assert.equal(response.status.detected, 1);
+    assert.equal(response.status.added, 0);
+    assert.equal(response.status.skipped, 0);
+    assert.equal(response.status.remaining, 1);
+    assert.match(response.status.message, /^Incomplete\./);
+  });
+});
