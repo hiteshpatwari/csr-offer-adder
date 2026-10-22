@@ -41,6 +41,26 @@ async function waitForFile(filePath, timeoutMs = 30_000) {
   throw new Error(`Timed out waiting for ${filePath}`);
 }
 
+async function waitForDebugTarget(port, child, timeoutMs = 30_000) {
+  const deadline = Date.now() + timeoutMs;
+  let lastError;
+  while (Date.now() < deadline) {
+    if (child.exitCode !== null) throw new Error(`Chrome exited before DevTools was ready (code ${child.exitCode})`);
+    try {
+      const response = await fetch(`http://127.0.0.1:${port}/json/list`);
+      if (!response.ok) throw new Error(`DevTools returned HTTP ${response.status}`);
+      const targets = await response.json();
+      const page = targets.find((target) => target.type === 'page');
+      if (page?.webSocketDebuggerUrl) return page;
+      lastError = new Error('Chrome did not expose a page debugging target yet');
+    } catch (error) {
+      lastError = error;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  throw new Error(`Timed out waiting for Chrome DevTools: ${lastError?.message || 'unknown error'}`);
+}
+
 async function withBrowser(run) {
   const executable = chromeExecutable();
   assert.ok(executable, 'Chrome or Chromium is required for browser tests');
@@ -58,9 +78,7 @@ async function withBrowser(run) {
 
   try {
     const [portText] = (await waitForFile(path.join(profile, 'DevToolsActivePort'))).trim().split(/\r?\n/);
-    const targets = await fetch(`http://127.0.0.1:${portText}/json/list`).then((response) => response.json());
-    const page = targets.find((target) => target.type === 'page');
-    assert.ok(page?.webSocketDebuggerUrl, 'Chrome did not expose a page debugging target');
+    const page = await waitForDebugTarget(portText, child);
 
     const socket = new WebSocket(page.webSocketDebuggerUrl);
     await new Promise((resolve, reject) => {
